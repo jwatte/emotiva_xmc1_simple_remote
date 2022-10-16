@@ -9,6 +9,8 @@
 #include <vector>
 #include <string>
 
+#pragma warning(disable : 4996)
+
 #pragma comment(lib, "ws2_32.lib")
 #pragma comment(lib, "user32.lib")
 #pragma comment(lib, "gdi32.lib")
@@ -277,7 +279,7 @@ bool ParsePoll(char const *buf, size_t len)
     return false;
 }
 
-DWORD Updater(LPVOID)
+DWORD WINAPI Updater(LPVOID)
 {
     while (connected)
     {
@@ -338,7 +340,7 @@ DWORD Updater(LPVOID)
     return 0;
 }
 
-DWORD Poller(LPVOID)
+DWORD WINAPI Poller(LPVOID)
 {
     SOCKET s = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
     if (s == INVALID_SOCKET)
@@ -626,7 +628,7 @@ void MakeWindow()
     ::ShowWindow(hGui, SW_SHOW);
 }
 
-INT WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, INT nCmdShow)
+INT __stdcall WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, INT nCmdShow)
 {
     InitializeCriticalSection(&locksubs);
     WSADATA wsaData = {0};
