@@ -21,6 +21,8 @@ void error(char const *str)
     ::ExitProcess(1);
 }
 
+#define DEFAULT_FONTSIZE 24
+
 bool running = true;
 bool connected = false;
 struct sockaddr_in avraddr = {};
@@ -35,9 +37,13 @@ int desireVolume = -40;
 const int maxVolume = 0;
 const int minVolume = -60;
 int volume = -40;
+double poll_speed = 0.1;
+int fontsize = DEFAULT_FONTSIZE;
 
 double lastreceived;
 double lastupdatetime;
+
+#define MAX_POLL_SPEED 2.0
 
 double performanceFrequency()
 {
@@ -214,7 +220,7 @@ void sendupdate(char const *key, char const *value)
     cmd += "</emotivaControl>\n";
     if (avrsock != INVALID_SOCKET)
     {
-        if (sendto(avrsock, cmd.c_str(), cmd.length(), 0, (sockaddr *)&avraddr, sizeof(avraddr)) == SOCKET_ERROR)
+        if (sendto(avrsock, cmd.c_str(), (int)cmd.length(), 0, (sockaddr *)&avraddr, (int)sizeof(avraddr)) == SOCKET_ERROR)
         {
             message = "Failed to send command";
         }
@@ -290,7 +296,7 @@ DWORD WINAPI Updater(LPVOID)
             break;
         }
         SOCKET s = avrsock;
-        if (now - lastupdatetime > 0.5)
+        if (now - lastupdatetime > poll_speed)
         {
             lastupdatetime = now;
             ::EnterCriticalSection(&locksubs);
@@ -303,7 +309,7 @@ DWORD WINAPI Updater(LPVOID)
                     sub = sub + "<" + it.name + " />\n";
                 }
                 sub = sub + "</emotivaUpdate>\n";
-                if (sendto(s, sub.c_str(), sub.size(), 0, (sockaddr const *)&avraddr, (int)sizeof(avraddr)) == SOCKET_ERROR)
+                if (sendto(s, sub.c_str(), (int)sub.size(), 0, (sockaddr const *)&avraddr, (int)sizeof(avraddr)) == SOCKET_ERROR)
                 {
                     connected = false;
                     char estr[1000];
@@ -320,10 +326,14 @@ DWORD WINAPI Updater(LPVOID)
         {
             fd_set set = {0};
             FD_SET(s, &set);
-            struct timeval wait = {0, 100000};
-            select(s + 1, &set, nullptr, nullptr, &wait);
+            struct timeval wait = {0, 20000};
+            select((int)s + 1, &set, nullptr, nullptr, &wait);
             if (FD_ISSET(s, &set))
             {
+                if (poll_speed < MAX_POLL_SPEED)
+                {
+                    poll_speed += 0.05;
+                }
                 char buf[10000];
                 int len = recv(s, buf, 9999, 0);
                 if (len > 0)
@@ -382,7 +392,7 @@ DWORD WINAPI Poller(LPVOID)
             sin.sin_family = AF_INET;
             sin.sin_port = htons(7000);
             sin.sin_addr.s_addr = INADDR_BROADCAST;
-            if (sendto(s, discover, len, 0, (struct sockaddr *)&sin, sizeof(sin)) == SOCKET_ERROR)
+            if (sendto(s, discover, (int)len, 0, (struct sockaddr *)&sin, (int)sizeof(sin)) == SOCKET_ERROR)
             {
                 char estr[1000];
                 sprintf(estr, "Could not send broadcast: %d", ::WSAGetLastError());
@@ -393,7 +403,7 @@ DWORD WINAPI Poller(LPVOID)
         fd_set fds;
         FD_ZERO(&fds);
         FD_SET(s, &fds);
-        if (select(s + 1, &fds, NULL, NULL, &timo) == SOCKET_ERROR)
+        if (select((int)s + 1, &fds, NULL, NULL, &timo) == SOCKET_ERROR)
         {
             char estr[1000];
             sprintf(estr, "Could not select: %d", ::WSAGetLastError());
@@ -456,9 +466,22 @@ void GetMessageArea(RECT *crect, RECT *area)
     area->bottom = ((crect->bottom - crect->top) - 20) / 4 + 5;
 }
 
+HFONT hFontDraw;
+int logFontHeight = -1;
+
 void DrawWindow(HWND hwnd, HDC hdc)
 {
     ::EnterCriticalSection(&locksubs);
+    if (logFontHeight != fontsize)
+    {
+        HFONT hFont = (HFONT)::GetStockObject(DEFAULT_GUI_FONT);
+        LOGFONT logfont;
+        GetObject(hFont, sizeof(LOGFONT), &logfont);
+        logfont.lfWidth = 0;
+        logfont.lfHeight = fontsize;
+        hFontDraw = CreateFontIndirect(&logfont);
+    }
+    HGDIOBJ oldFont = ::SelectObject(hdc, hFontDraw);
     RECT rect = {};
     ::GetClientRect(hwnd, &rect);
     ::FillRect(hdc, &rect, (HBRUSH)::GetStockObject(BLACK_BRUSH));
@@ -483,6 +506,7 @@ void DrawWindow(HWND hwnd, HDC hdc)
     {
         sub.render(hdc, &rect, &sub);
     }
+    ::SelectObject(hdc, oldFont);
 
     ::LeaveCriticalSection(&locksubs);
 }
@@ -542,6 +566,9 @@ LRESULT CALLBACK MyWindowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
         running = false;
         ::PostQuitMessage(0);
         break;
+    case WM_ERASEBKGND:
+        //  I will redraw full window anyway
+        return 1;
     case WM_PAINT:
     {
         PAINTSTRUCT ps = {0};
@@ -553,6 +580,7 @@ LRESULT CALLBACK MyWindowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
     case WM_LBUTTONDOWN:
     {
         ::EnterCriticalSection(&locksubs);
+        poll_speed = 0.1;
         if (tracking)
         {
             tracking->down = false;
@@ -580,6 +608,7 @@ LRESULT CALLBACK MyWindowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
     case WM_MOUSEMOVE:
     {
         ::EnterCriticalSection(&locksubs);
+        poll_speed = 0.1;
         if (tracking)
         {
             POINT pt = {GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)};
@@ -595,6 +624,7 @@ LRESULT CALLBACK MyWindowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
     case WM_LBUTTONUP:
     {
         ::EnterCriticalSection(&locksubs);
+        poll_speed = 0.1;
         if (tracking)
         {
             subthing *hit = tracking;
@@ -622,9 +652,27 @@ void SetupClass()
     RegisterClassExW(&wcex);
 }
 
+#define DEFAULT_WIDTH 800
+#define DEFAULT_HEIGHT 320
+#define DEFAULT_SCREENWIDTH 1024
+
 void MakeWindow()
 {
-    hGui = ::CreateWindowExW(WS_EX_APPWINDOW | WS_EX_WINDOWEDGE, L"XmcRemoteClass", L"XmcRemote", WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, 800, 320, NULL, NULL, GetModuleHandle(NULL), NULL);
+    int swidth = ::GetSystemMetrics(SM_CXSCREEN);
+    fontsize = DEFAULT_FONTSIZE * swidth / DEFAULT_SCREENWIDTH;
+    hGui = ::CreateWindowExW(
+        WS_EX_APPWINDOW | WS_EX_WINDOWEDGE,
+        L"XmcRemoteClass",
+        L"XmcRemote",
+        WS_OVERLAPPEDWINDOW,
+        CW_USEDEFAULT,
+        CW_USEDEFAULT,
+        DEFAULT_WIDTH * swidth / DEFAULT_SCREENWIDTH,
+        DEFAULT_HEIGHT * swidth / DEFAULT_SCREENWIDTH,
+        NULL,
+        NULL,
+        GetModuleHandle(NULL),
+        NULL);
     ::ShowWindow(hGui, SW_SHOW);
 }
 
